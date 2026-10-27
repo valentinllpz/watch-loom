@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# watch-loom <loom url> [extra watch.py flags]     frames + transcript for a Loom, on this Mac, with your browser's Loom login
+# watch-loom --setup                               install what it needs (ffmpeg, yt-dlp, the watch plugin), nothing else
+# watch-loom --login                               open your browser on loom.com to sign in
+# watch-loom --browser                             show which browser's sign-in is used
+# WATCH_LOOM_BROWSER=firefox (or "chrome:Profile 1")  pick the browser/profile; default: the Mac's default browser
+#   watch-loom <url> --max-frames 40                           longer video
+#   watch-loom <url> --start 1:10 --end 2:30                   one part
+#   watch-loom <url> --detail transcript --timestamps 0:42,1:15   the exact seconds the author points at
+# Exit codes: 0 report printed · 2 setup problem (message says what) · 3 Loom refused: a Chrome window is open, sign in and run again.
+set -uo pipefail
+
+OUT=${WATCH_LOOM_OUT:-${TMPDIR:-/tmp}/watch-loom}
+say() { printf '%s\n' "$*" >&2; }
+
+# The browser whose Loom sign-in is used, as yt-dlp names them (BROWSER[:PROFILE]): WATCH_LOOM_BROWSER wins, else the
+# Mac's default browser when yt-dlp can read its cookies, else the first one installed. Arc isn't supported by yt-dlp.
+app_of() { case "$1" in chrome) echo "Google Chrome";; safari) echo Safari;; firefox) echo Firefox;; brave) echo "Brave Browser";; edge) echo "Microsoft Edge";; chromium) echo Chromium;; vivaldi) echo Vivaldi;; opera) echo Opera;; esac; }
+installed() { [ -d "/Applications/$(app_of "$1").app" ] || [ -d "$HOME/Applications/$(app_of "$1").app" ] || { [ "$1" = safari ] && [ -d /System/Applications/Safari.app ]; }; }
+default_browser() {
+  local id; id=$(defaults read "$HOME/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure" LSHandlers 2>/dev/null \
+    | grep -A3 'LSHandlerURLScheme = https' | grep LSHandlerRoleAll | head -1 | sed 's/.*= "\(.*\)";/\1/')
+  case "$id" in com.google.chrome) echo chrome;; com.apple.safari) echo safari;; org.mozilla.firefox) echo firefox;; com.brave.browser) echo brave;;
+    com.microsoft.edgemac) echo edge;; org.chromium.chromium) echo chromium;; com.vivaldi.vivaldi) echo vivaldi;; com.operasoftware.opera) echo opera;; esac
+}
+browser() {
+  [ -n "${WATCH_LOOM_BROWSER:-}" ] && { echo "$WATCH_LOOM_BROWSER"; return; }
+  local d; d=$(default_browser)
+  [ -n "$d" ] && installed "$d" && { echo "$d"; return; }
+  for b in chrome brave edge firefox safari chromium vivaldi opera; do installed "$b" && { echo "$b"; return; }; done
+}
+PROFILE=$(browser)
+[ -n "$PROFILE" ] || { say "No browser yt-dlp can read cookies from (Chrome, Safari, Firefox, Brave, Edge, Chromium, Vivaldi, Opera). Arc isn't supported."; exit 2; }
+APP=$(app_of "${PROFILE%%:*}")
+
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+plugin_scripts() { ls -d "$HOME"/.claude/plugins/cache/claude-video/watch/*/skills/watch/scripts 2>/dev/null | tail -1; }
+
+setup() {
+  [ "$(uname)" = Darwin ] || { say "watch-loom runs on macOS."; return 2; }
+  for b in ffmpeg yt-dlp; do
+    if ! command -v "$b" >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/$b" ]; then
+      command -v brew >/dev/null 2>&1 || { say "$b is missing and Homebrew isn't installed: https://brew.sh"; return 2; }
+      say "installing $b with Homebrew…"
+      brew install "$b" >/dev/null 2>&1 || { say "brew install $b failed; run it by hand."; return 2; }
+    fi
+  done
+  if [ -z "$(plugin_scripts)" ]; then
+    command -v claude >/dev/null 2>&1 || { say "Claude Code isn't on PATH."; return 2; }
+    say "installing the watch plugin (bradautomates/claude-video)…"
+    claude plugin marketplace add bradautomates/claude-video >/dev/null 2>&1 || true
+    claude plugin install watch@claude-video >/dev/null 2>&1
+    [ -n "$(plugin_scripts)" ] || { say "the watch plugin did not install: claude plugin install watch@claude-video"; return 2; }
+  fi
+  W=$(plugin_scripts)
+  if ! python3 "$W/setup.py" --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("setup_complete") and d.get("engine")=="local" else 1)' 2>/dev/null; then
+    say "configuring the watch plugin: local engine, captions only (no upload)…"
+    python3 "$W/setup.py" --engine local --backend none --detail balanced >/dev/null 2>&1 || { say "the watch plugin's setup failed: python3 $W/setup.py --engine local"; return 2; }
+  fi
+  return 0
+}
+
+login() {
+  say "Opening $APP on loom.com: sign in there, then run watch-loom again."
+  [ "${PROFILE%%:*}" = safari ] && say "Safari: the terminal also needs Full Disk Access (System Settings › Privacy & Security) to read its cookies."
+  open -a "$APP" "https://www.loom.com/login" 2>/dev/null || open "https://www.loom.com/login"
+}
+
+[ $# -ge 1 ] || usage
+case "$1" in
+  --setup) setup; exit $? ;;
+  --login) login; exit 3 ;;
+  --browser) echo "$PROFILE ($APP)"; exit 0 ;;
+  -h|--help) usage ;;
+esac
+URL=$1; shift
+setup || exit 2
+W=$(plugin_scripts)
+mkdir -p "$OUT"
+LOG=$(mktemp "$OUT/run.XXXXXX")
+PATH="$HOME/.local/bin:$PATH" python3 "$W/watch.py" "$URL" --engine local --cookies-from-browser "$PROFILE" \
+  --resolution 1024 --max-frames 24 --out-dir "$OUT" "$@" 2>&1 | tee "$LOG"
+code=${PIPESTATUS[0]}
+if grep -qiE 'HTTP Error 403|HTTP Error 401|login|sign in|cookies' "$LOG" && grep -qi 'unavailable\|failed' "$LOG"; then
+  say ""
+  say "Loom refused the download: $APP isn't signed in to loom.com (yt-dlp browser: $PROFILE)."
+  login
+  rm -f "$LOG"; exit 3
+fi
+rm -f "$LOG"; exit "$code"

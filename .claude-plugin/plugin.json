@@ -1,0 +1,12 @@
+{
+  "name": "watch-loom",
+  "version": "0.3.0",
+  "description": "Watch a Loom before judging or building: frames and transcript on your Mac, every frame read, nothing uploaded.",
+  "author": {
+    "name": "Valentin Lugand Lopez"
+  },
+  "homepage": "https://github.com/valentinllpz/watch-loom",
+  "repository": "https://github.com/valentinllpz/watch-loom",
+  "license": "MIT",
+  "keywords": ["loom", "video", "review", "pull-request", "frames", "transcript"]
+}

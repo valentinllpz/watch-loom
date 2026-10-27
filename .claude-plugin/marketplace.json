@@ -1,0 +1,21 @@
+{
+  "name": "valentinllpz",
+  "metadata": {
+    "description": "Claude Code plugins by valentinllpz."
+  },
+  "owner": {
+    "name": "Valentin Lugand Lopez"
+  },
+  "plugins": [
+    {
+      "name": "watch-loom",
+      "description": "Watch a Loom (frames + transcript, on your Mac, with your browser's Loom sign-in) before reviewing or building what it demonstrates.",
+      "author": {
+        "name": "Valentin Lugand Lopez"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/valentinllpz/watch-loom"
+    }
+  ]
+}
